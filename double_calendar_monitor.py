@@ -14,6 +14,31 @@ import os
 # CONFIGURAÇÕES GERAIS E SEGREDOS
 # ==============================================================================
 st.set_page_config(page_title="Monitor de Calendários", layout="wide")
+
+# NOVO: Bloco de CSS para diminuir o tamanho das fontes e compactar a interface
+st.markdown("""
+    <style>
+    /* Diminui o tamanho do título principal */
+    h1 {
+        font-size: 2.2rem;
+    }
+    /* Diminui o tamanho dos subtítulos (Calendário PUT/CALL) */
+    h3 {
+        font-size: 1.1rem;
+    }
+    /* Diminui o tamanho da fonte dentro dos componentes st.metric */
+    div[data-testid="stMetricValue"] {
+        font-size: 1.75rem;
+    }
+    div[data-testid="stMetricLabel"] {
+        font-size: 0.9rem;
+    }
+    div[data-testid="stMetricDelta"] {
+        font-size: 0.9rem;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 MARKET_DATA_TOKEN = st.secrets.get("MARKET_DATA_TOKEN", "")
 BOT_TOKEN = st.secrets.get("telegram", {}).get("BOT_TOKEN", "")
 CHAT_ID = st.secrets.get("telegram", {}).get("CHAT_ID", "")
@@ -65,12 +90,10 @@ def get_option_data(option_symbol):
     except requests.exceptions.RequestException as e:
         return (False, f"Erro de conexão para {option_symbol}: {e}")
 
-# ALTERADO: Corrigido para usar apenas a primeira letra do tipo de opção
 def generate_option_symbol(ticker, exp_date, strike, option_type):
     exp_dt = datetime.strptime(exp_date, "%Y-%m-%d")
     strike_part = f"{int(strike * 1000):08d}"
     base_ticker = ''.join([i for i in ticker if not i.isdigit()])
-    # Usa option_type[0] para pegar 'p' ou 'c' em vez da palavra inteira
     return f"{base_ticker}{exp_dt.strftime('%y%m%d')}{option_type[0].upper()}{strike_part}"
 
 def calculate_z_percent(td_price_back, td_price_front, now_price_back, now_price_front):
@@ -84,7 +107,7 @@ def calculate_z_percent(td_price_back, td_price_front, now_price_back, now_price
 # FUNÇÃO REUTILIZÁVEL PARA RENDERIZAR UM CALENDÁRIO
 # ==============================================================================
 def render_calendar_block(ticker, calendar_data, calendar_history):
-    cal_type = calendar_data['type'] # Mantém 'put' ou 'call'
+    cal_type = calendar_data['type']
     expirations = calendar_data['expirations']
 
     st.subheader(f"Calendário {calendar_data['display_name']}")
