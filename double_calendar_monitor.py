@@ -16,10 +16,10 @@ import telegram # NOVO
 MARKET_DATA_TOKEN = st.secrets.get("MARKET_DATA_TOKEN", "")
 
 # NOVO: Configurações do Telegram, carregadas dos secrets
-BOT_TOKEN = st.secrets.get("telegram", {}).get("BOT_TOKEN", "") [cite: 1]
-CHAT_ID = st.secrets.get("telegram", {}).get("CHAT_ID", "") [cite: 1]
+BOT_TOKEN = st.secrets.get("telegram", {}).get("BOT_TOKEN", "") 
+CHAT_ID = st.secrets.get("telegram", {}).get("CHAT_ID", "") 
 
-API_BASE_URL = "https://api.marketdata.app/v1/" [cite: 1]
+API_BASE_URL = "https://api.marketdata.app/v1/" 
 
 # Define o intervalo de atualização em segundos (5 minutos)
 REFRESH_INTERVAL_SECONDS = 300 
