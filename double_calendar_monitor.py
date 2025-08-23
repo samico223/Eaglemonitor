@@ -44,23 +44,27 @@ def send_telegram_message(message):
     try: asyncio.run(send())
     except RuntimeError: asyncio.get_running_loop().create_task(send())
 
+# ALTERADO: A função agora retorna uma tupla (sucesso, resultado) e não exibe mais toasts.
 @st.cache_data(ttl=REFRESH_INTERVAL_SECONDS - 10)
 def get_option_data(option_symbol):
-    if not MARKET_DATA_TOKEN or not option_symbol: return None
+    if not MARKET_DATA_TOKEN or not option_symbol: return (False, "Token ou símbolo ausente.")
     url = f"{API_BASE_URL}options/quotes/{option_symbol}/"
     params = {'token': MARKET_DATA_TOKEN}
     try:
         r = requests.get(url, params=params, headers={"Accept": "application/json"})
         r.raise_for_status()
         data = r.json()
-        return data if data.get('s') == 'ok' else None
+        if data.get('s') == 'ok':
+            return (True, data)
+        else:
+            return (False, "API retornou status 'no_data'.")
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 400: st.toast(f"Erro 400: Símbolo inválido: {option_symbol}", icon="🚨")
-        else: st.toast(f"Erro de API para {option_symbol}: {e}", icon="🚨")
-        return None
+        if e.response.status_code == 400:
+            return (False, f"Erro 400: Símbolo inválido: {option_symbol}")
+        else:
+            return (False, f"Erro de API para {option_symbol}: {e}")
     except requests.exceptions.RequestException as e:
-        st.toast(f"Erro de conexão para {option_symbol}: {e}", icon="🚨")
-        return None
+        return (False, f"Erro de conexão para {option_symbol}: {e}")
 
 def generate_option_symbol(ticker, exp_date, strike, option_type):
     exp_dt = datetime.strptime(exp_date, "%Y-%m-%d")
@@ -87,21 +91,23 @@ def render_calendar_block(ticker, calendar_data, calendar_history):
     front_symbol = generate_option_symbol(ticker, expirations['front'], calendar_data['strike'], cal_type)
     back_symbol = generate_option_symbol(ticker, expirations['back'], calendar_data['strike'], cal_type)
     
-    front_data = get_option_data(front_symbol)
-    back_data = get_option_data(back_symbol)
+    # ALTERADO: Lógica para tratar o novo retorno da função da API
+    success_front, front_data = get_option_data(front_symbol)
+    success_back, back_data = get_option_data(back_symbol)
     
-    now_price_front = front_data['last'][0] if front_data and front_data.get('last') else 0
-    now_price_back = back_data['last'][0] if back_data and back_data.get('last') else 0
+    if not success_front: st.toast(front_data, icon="🚨")
+    if not success_back: st.toast(back_data, icon="🚨")
+    
+    now_price_front = front_data['last'][0] if success_front and front_data.get('last') else 0
+    now_price_back = back_data['last'][0] if success_back and back_data.get('last') else 0
     
     z_percent = calculate_z_percent(calendar_data['td_price_back'], calendar_data['td_price_front'], now_price_back, now_price_front)
     
-    # ALTERADO: Adiciona o Z e o timestamp ao histórico específico deste calendário
     current_time_str = datetime.now().strftime("%H:%M")
     if not calendar_history['ts'] or calendar_history['ts'][-1] != current_time_str:
         calendar_history['ts'].append(current_time_str)
         calendar_history['z'].append(z_percent)
     
-    # Lógica de Alerta
     if calendar_data.get('alert_target', 0) > 0:
         if z_percent >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
             msg = f"🎯 *ALERTA DE LUCRO ({cal_type})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{z_percent:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
@@ -117,13 +123,12 @@ def render_calendar_block(ticker, calendar_data, calendar_history):
     
     st.metric(f"%Z (Alvo: {calendar_data.get('alert_target', 0)}%)", f"{z_percent:.2f}%")
     
-    # ALTERADO: Usa o histórico próprio do calendário para o gráfico
     if len(calendar_history['z']) > 1:
         chart_data = pd.DataFrame({f"%Z {calendar_data['display_name']}": calendar_history['z']}, index=calendar_history['ts'])
         st.line_chart(chart_data)
 
     st.divider()
-    return back_data
+    return back_data if success_back else None
 
 # ==============================================================================
 # CORPO PRINCIPAL DO APP
@@ -133,10 +138,10 @@ st.title("🗓️ Monitoramento de Calendários Duplos Pré-Earnings")
 if 'positions' not in st.session_state:
     st.session_state.positions = load_positions()
 
+# (Formulário da Sidebar permanece o mesmo, sem o botão temporário)
 with st.sidebar:
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
-        # ... (Campos do formulário) ...
         ticker = st.text_input("Ticker do Ativo (ex: PETR4)").upper()
         st.subheader("Calendário PUT")
         put_strike = st.number_input("Strike da PUT", format="%.2f", step=0.01, key="p_s")
@@ -159,7 +164,6 @@ with st.sidebar:
             back_exp_str = back_exp.strftime("%Y-%m-%d")
             fad_date = front_exp - timedelta(days=14)
             
-            # ALTERADO: Nova estrutura de dados para o histórico
             new_pos = {
                 "put_original": {"type": "p", "display_name": "PUT Original", "strike": put_strike, "td_price_front": td_price_pf, "td_price_back": td_price_pb, "alert_target": put_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
                 "call_original": {"type": "c", "display_name": "CALL Original", "strike": call_strike, "td_price_front": td_price_cf, "td_price_back": td_price_cb, "alert_target": call_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
@@ -185,14 +189,11 @@ else:
             with col2:
                 back_data_c = render_calendar_block(ticker, data['call_original'], data['history']['call_original'])
 
-            # Renderiza os ajustes
             for i, adj_data in enumerate(data.get('adjustments', [])):
-                # Garante que o histórico para o ajuste exista
                 adj_history_key = f"adj_{i}"
                 if adj_history_key not in data['history']:
                     data['history'][adj_history_key] = {"ts": [], "z": []}
                 
-                # Organiza os ajustes em colunas
                 if i % 2 == 0:
                     col1, col2 = st.columns(2)
                     with col1:
@@ -201,14 +202,12 @@ else:
                     with col2:
                         render_calendar_block(ticker, adj_data, data['history'][adj_history_key])
 
-            # Painel de controle geral da posição
             st.subheader("Controle Geral da Posição")
             
             back_vol_now_p = back_data_p['iv'][0] if back_data_p and back_data_p.get('iv') else 0
             back_vol_now_c = back_data_c['iv'][0] if back_data_c and back_data_c.get('iv') else 0
             back_vol_now = ((back_vol_now_p + back_vol_now_c) / 2) * 100 if back_vol_now_p and back_vol_now_c else 0
 
-            # ALTERADO: Lógica do histórico da VOL
             current_time_str = datetime.now().strftime("%H:%M")
             vol_history = data['history']['back_vol']
             if not vol_history['ts'] or vol_history['ts'][-1] != current_time_str:
@@ -274,4 +273,3 @@ save_positions(st.session_state.positions)
 st.caption(f"Última atualização: {datetime.now().strftime('%H:%M:%S')}")
 time.sleep(REFRESH_INTERVAL_SECONDS)
 st.rerun()
-x
