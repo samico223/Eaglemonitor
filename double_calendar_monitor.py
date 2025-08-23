@@ -103,13 +103,12 @@ def generate_option_symbol(ticker, exp_date, strike, option_type):
     base_ticker = ''.join([i for i in ticker if not i.isdigit()])
     return f"{base_ticker}{exp_dt.strftime('%y%m%d')}{option_type[0].upper()}{strike_part}"
 
-# ALTERADO: A fórmula para 'current_value' foi corrigida.
+# ESTA É A FUNÇÃO CORRIGIDA
 def calculate_pl_values(td_price_back, td_price_front, now_price_back, now_price_front):
     initial_cost = td_price_back - td_price_front
     if initial_cost == 0: return {"initial_cost": 0, "absolute_pl": 0, "z_percent": 0}
     
-    # A linha abaixo estava invertida, causando o erro de cálculo.
-    # Correto: Preço da opção longa (back) - Preço da opção curta (front)
+    # Fórmula correta:
     current_value = now_price_back - now_price_front
     
     absolute_pl = current_value - initial_cost
