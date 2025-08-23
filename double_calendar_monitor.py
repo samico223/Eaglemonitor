@@ -227,7 +227,7 @@ else:
             st.divider()
 
             # Etapa 4 - Exibir o controle geral da posição
-            st.subheader("Controle Geral da Posição")
+            st.subheader("BAckVol")
             
             back_data_p = live_data_list[0]['back_api_data']
             back_data_c = live_data_list[1]['back_api_data']
