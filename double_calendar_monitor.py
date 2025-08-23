@@ -127,23 +127,6 @@ st.title("🗓️ Monitoramento de Calendários Duplos Pré-Earnings")
 if 'positions' not in st.session_state:
     st.session_state.positions = load_positions()
 
-# --- INÍCIO DO BLOCO DE CÓDIGO TEMPORÁRIO ---
-# Este bloco adiciona um botão para deletar o arquivo de dados e corrigir erros.
-# REMOVA ESTE BLOCO APÓS USÁ-LO UMA VEZ.
-st.sidebar.title("Opções de Admin (Temporário)")
-st.sidebar.warning("Use este botão apenas uma vez para resetar os dados salvos e corrigir o erro `KeyError`.")
-if st.sidebar.button("DELETAR ARQUIVO DE DADOS"):
-    if os.path.exists(DB_FILE_PATH):
-        os.remove(DB_FILE_PATH)
-        st.sidebar.success(f"Arquivo '{DB_FILE_PATH}' deletado!")
-        st.sidebar.info("A aplicação será reiniciada.")
-        time.sleep(3) # Pausa para ler a mensagem
-        st.rerun()
-    else:
-        st.sidebar.warning("Arquivo de dados não encontrado.")
-st.sidebar.divider()
-# --- FIM DO BLOCO DE CÓDIGO TEMPORÁRIO ---
-
 with st.sidebar:
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
