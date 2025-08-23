@@ -103,12 +103,18 @@ def generate_option_symbol(ticker, exp_date, strike, option_type):
     base_ticker = ''.join([i for i in ticker if not i.isdigit()])
     return f"{base_ticker}{exp_dt.strftime('%y%m%d')}{option_type[0].upper()}{strike_part}"
 
+# ALTERADO: A função agora lida com valores None
 def calculate_pl_values(td_price_back, td_price_front, now_price_back, now_price_front):
+    if now_price_back is None or now_price_front is None:
+        return {"initial_cost": None, "absolute_pl": None, "z_percent": None}
+    
     initial_cost = td_price_back - td_price_front
     if initial_cost == 0: return {"initial_cost": 0, "absolute_pl": 0, "z_percent": 0}
+    
     current_value = now_price_back - now_price_front
     absolute_pl = current_value - initial_cost
     z_percent = (absolute_pl / abs(initial_cost)) * 100
+    
     return {"initial_cost": initial_cost, "absolute_pl": absolute_pl, "z_percent": z_percent}
 
 # ==============================================================================
@@ -117,26 +123,34 @@ def calculate_pl_values(td_price_back, td_price_front, now_price_back, now_price
 def render_calendar_block(ticker, calendar_data, live_data, calendar_history):
     st.subheader(f"Calendário {calendar_data['display_name']}")
     
-    current_time_str = datetime.now().strftime("%H:%M")
-    if not calendar_history['ts'] or calendar_history['ts'][-1] != current_time_str:
-        calendar_history['ts'].append(current_time_str)
-        calendar_history['z'].append(live_data['z_percent'])
+    z_percent_val = live_data['z_percent']
     
-    if calendar_data.get('alert_target', 0) > 0:
-        if live_data['z_percent'] >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
+    # ALTERADO: Adiciona ao histórico apenas se o valor for válido (não None)
+    if z_percent_val is not None:
+        current_time_str = datetime.now().strftime("%H:%M")
+        if not calendar_history['ts'] or calendar_history['ts'][-1] != current_time_str:
+            calendar_history['ts'].append(current_time_str)
+            calendar_history['z'].append(z_percent_val)
+    
+    if z_percent_val is not None and calendar_data.get('alert_target', 0) > 0:
+        if z_percent_val >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
             cal_type = calendar_data['type'].upper()
-            msg = f"🎯 *ALERTA DE LUCRO ({cal_type})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{live_data['z_percent']:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
+            msg = f"🎯 *ALERTA DE LUCRO ({cal_type})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{z_percent_val:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
             send_telegram_message(msg)
             calendar_data['alert_sent'] = True
-        elif live_data['z_percent'] < calendar_data['alert_target'] and calendar_data.get('alert_sent', False):
+        elif z_percent_val < calendar_data['alert_target'] and calendar_data.get('alert_sent', False):
             calendar_data['alert_sent'] = False
             
     col1, col2 = st.columns(2)
     cal_type_upper = calendar_data['type'].upper()
-    col1.metric(f"{cal_type_upper}F Now", f"{live_data['now_price_front']:.2f}", f"↑ TD: {calendar_data['td_price_front']:.2f}")
-    col2.metric(f"{cal_type_upper}B Now", f"{live_data['now_price_back']:.2f}", f"↑ TD: {calendar_data['td_price_back']:.2f}")
-    
-    st.metric(f"%Z (Alvo: {calendar_data.get('alert_target', 0)}%)", f"{live_data['z_percent']:.2f}%")
+
+    price_front_display = f"{live_data['now_price_front']:.2f}" if live_data['now_price_front'] is not None else "---"
+    price_back_display = f"{live_data['now_price_back']:.2f}" if live_data['now_price_back'] is not None else "---"
+    z_percent_display = f"{z_percent_val:.2f}%" if z_percent_val is not None else "---"
+
+    col1.metric(f"{cal_type_upper}F Now", price_front_display, f"↑ TD: {calendar_data['td_price_front']:.2f}")
+    col2.metric(f"{cal_type_upper}B Now", price_back_display, f"↑ TD: {calendar_data['td_price_back']:.2f}")
+    st.metric(f"%Z (Alvo: {calendar_data.get('alert_target', 0)}%)", z_percent_display)
     
     if len(calendar_history['z']) > 1:
         chart_data = pd.DataFrame({f"%Z {calendar_data['display_name']}": calendar_history['z']}, index=calendar_history['ts'])
@@ -153,7 +167,6 @@ if 'positions' not in st.session_state:
     st.session_state.positions = load_positions_from_db()
 
 with st.sidebar:
-    
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
         ticker = st.text_input("Ticker do Ativo (ex: PETR4)").upper()
@@ -194,14 +207,22 @@ else:
         with st.expander(f"Ativo: {ticker}", expanded=True):
             all_calendars = [data['put_original'], data['call_original']] + data.get('adjustments', [])
             live_data_list = []
+            
             for cal_data in all_calendars:
                 front_symbol = generate_option_symbol(ticker, cal_data['expirations']['front'], cal_data['strike'], cal_data['type'])
                 back_symbol = generate_option_symbol(ticker, cal_data['expirations']['back'], cal_data['strike'], cal_data['type'])
                 success_front, front_api_data = get_option_data(front_symbol)
                 success_back, back_api_data = get_option_data(back_symbol)
-                now_price_front = front_api_data['last'][0] if success_front and front_api_data.get('last') else 0
-                now_price_back = back_api_data['last'][0] if success_back and back_api_data.get('last') else 0
+                
+                # ALTERADO: Trata o preço 0 como None (dado inválido)
+                price_front_val = front_api_data['last'][0] if success_front and front_api_data.get('last') else 0
+                now_price_front = price_front_val if price_front_val > 0 else None
+                
+                price_back_val = back_api_data['last'][0] if success_back and back_api_data.get('last') else 0
+                now_price_back = price_back_val if price_back_val > 0 else None
+                
                 pl_info = calculate_pl_values(cal_data['td_price_back'], cal_data['td_price_front'], now_price_back, now_price_front)
+                
                 live_data_list.append({"now_price_front": now_price_front, "now_price_back": now_price_back, "back_api_data": back_api_data if success_back else None, **pl_info})
             
             col1, col2 = st.columns(2)
@@ -221,12 +242,16 @@ else:
                     with col2:
                         render_calendar_block(ticker, adj_data, live_data_list[i+2], data['history'][adj_history_key])
             
-            total_absolute_pl = sum(item['absolute_pl'] for item in live_data_list)
-            total_initial_cost = sum(abs(item['initial_cost']) for item in live_data_list)
-            total_pl_percent = (total_absolute_pl / total_initial_cost) * 100 if total_initial_cost != 0 else 0
+            valid_pls = [item['absolute_pl'] for item in live_data_list if item['absolute_pl'] is not None]
+            valid_costs = [abs(item['initial_cost']) for item in live_data_list if item['initial_cost'] is not None]
+            total_absolute_pl = sum(valid_pls) if valid_pls else None
+            total_initial_cost = sum(valid_costs) if valid_costs else 0
+            total_pl_percent = (total_absolute_pl / total_initial_cost) * 100 if total_initial_cost != 0 and total_absolute_pl is not None else None
             
             st.subheader("Resultado Consolidado")
-            st.metric("P/L% Total do Trade", f"{total_pl_percent:.2f}%", f"R$ {total_absolute_pl:.2f}")
+            pl_percent_display = f"{total_pl_percent:.2f}%" if total_pl_percent is not None else "---"
+            pl_absolute_display = f"R$ {total_absolute_pl:.2f}" if total_absolute_pl is not None else ""
+            st.metric("P/L% Total do Trade", pl_percent_display, pl_absolute_display)
             st.divider()
             
             st.subheader("Controle Geral da Posição")
@@ -236,14 +261,16 @@ else:
             back_vol_now_c = back_data_c['iv'][0] * 100 if back_data_c and back_data_c.get('iv') else 0
             back_vol_now = ((back_vol_now_p + back_vol_now_c) / 2) if back_vol_now_p or back_vol_now_c else 0
             
-            current_time_str = datetime.now().strftime("%H:%M")
             vol_history = data['history']['back_vol']
-            if not vol_history['ts'] or vol_history['ts'][-1] != current_time_str:
-                vol_history['ts'].append(current_time_str)
-                vol_history['vol'].append(back_vol_now)
+            if back_vol_now > 0: # Adiciona ao histórico da vol apenas se for válido
+                current_time_str = datetime.now().strftime("%H:%M")
+                if not vol_history['ts'] or vol_history['ts'][-1] != current_time_str:
+                    vol_history['ts'].append(current_time_str)
+                    vol_history['vol'].append(back_vol_now)
             
             td_vol = data.get("td_back_vol", 0)
-            st.metric("Vol Média Atual (Back)", f"{back_vol_now:.2f}%", f"↑ TD: {td_vol:.2f}%")
+            vol_display = f"{back_vol_now:.2f}%" if back_vol_now > 0 else "---"
+            st.metric("Vol Média Atual (Back)", vol_display, f"↑ TD: {td_vol:.2f}%")
             if len(vol_history['vol']) > 1:
                 chart_data_v = pd.DataFrame({'Back Vol': vol_history['vol']}, index=vol_history['ts'])
                 st.line_chart(chart_data_v)
