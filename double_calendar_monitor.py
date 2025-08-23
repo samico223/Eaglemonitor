@@ -133,20 +133,6 @@ st.title("🗓️ Monitoramento de Calendários Duplos Pré-Earnings")
 if 'positions' not in st.session_state:
     st.session_state.positions = load_positions()
 
-# Bloco de código temporário para resetar a base de dados
-st.sidebar.title("Opções de Admin (Temporário)")
-st.sidebar.warning("Use este botão apenas uma vez para resetar os dados salvos e corrigir erros de formato.")
-if st.sidebar.button("DELETAR ARQUIVO DE DADOS"):
-    if os.path.exists(DB_FILE_PATH):
-        os.remove(DB_FILE_PATH)
-        st.sidebar.success(f"Arquivo '{DB_FILE_PATH}' deletado!")
-        st.sidebar.info("A aplicação será reiniciada.")
-        time.sleep(3)
-        st.rerun()
-    else:
-        st.sidebar.warning("Arquivo de dados não encontrado.")
-st.sidebar.divider()
-
 with st.sidebar:
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
@@ -288,3 +274,4 @@ save_positions(st.session_state.positions)
 st.caption(f"Última atualização: {datetime.now().strftime('%H:%M:%S')}")
 time.sleep(REFRESH_INTERVAL_SECONDS)
 st.rerun()
+x
