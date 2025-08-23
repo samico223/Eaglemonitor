@@ -153,35 +153,7 @@ if 'positions' not in st.session_state:
     st.session_state.positions = load_positions_from_db()
 
 with st.sidebar:
-    # --- INÍCIO DO BLOCO DE CÓDIGO TEMPORÁRIO ---
-    st.header("Admin (Temporário)")
-    st.warning("Use este botão uma vez para limpar o histórico dos gráficos.")
-    if st.button("Limpar Histórico dos Gráficos"):
-        for ticker, pos_data in st.session_state.positions.items():
-            # Limpa histórico dos calendários originais
-            pos_data['history']['put_original']['ts'].clear()
-            pos_data['history']['put_original']['z'].clear()
-            pos_data['history']['call_original']['ts'].clear()
-            pos_data['history']['call_original']['z'].clear()
-            # Limpa histórico da volatilidade
-            pos_data['history']['back_vol']['ts'].clear()
-            pos_data['history']['back_vol']['vol'].clear()
-            # Limpa histórico de todos os ajustes
-            for i in range(len(pos_data.get('adjustments', []))):
-                adj_key = f"adj_{i}"
-                if adj_key in pos_data['history']:
-                    pos_data['history'][adj_key]['ts'].clear()
-                    pos_data['history'][adj_key]['z'].clear()
-            
-            # Salva os dados limpos de volta no DB
-            update_position_in_db(ticker, pos_data)
-        
-        st.success("Histórico de todos os gráficos foi limpo!")
-        time.sleep(2)
-        st.rerun()
-    st.divider()
-    # --- FIM DO BLOCO DE CÓDIGO TEMPORÁRIO ---
-
+    
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
         ticker = st.text_input("Ticker do Ativo (ex: PETR4)").upper()
