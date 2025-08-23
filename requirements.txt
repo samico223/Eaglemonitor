@@ -3,3 +3,4 @@ requests
 pandas
 streamlit-autorefresh
 python-telegram-bot
+Supabase
