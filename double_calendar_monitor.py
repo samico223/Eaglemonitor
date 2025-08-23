@@ -8,7 +8,7 @@ import json
 import time
 import asyncio
 import telegram
-from supabase import create_client, Client # NOVO
+from supabase import create_client, Client
 
 # ==============================================================================
 # CONFIGURAÇÕES GERAIS E SEGREDOS
@@ -31,7 +31,6 @@ CHAT_ID = st.secrets.get("telegram", {}).get("CHAT_ID", "")
 API_BASE_URL = "https://api.marketdata.app/v1/"
 REFRESH_INTERVAL_SECONDS = 300
 
-# NOVO: Conexão com o Supabase
 try:
     supabase_url = st.secrets["supabase"]["url"]
     supabase_key = st.secrets["supabase"]["key"]
@@ -41,12 +40,11 @@ except Exception as e:
     st.stop()
 
 # ==============================================================================
-# FUNÇÕES DE BANCO DE DADOS (Substituindo as de arquivo)
+# FUNÇÕES DE BANCO DE DADOS
 # ==============================================================================
 def load_positions_from_db():
     try:
         response = supabase.table('positions').select('ticker, position_data').execute()
-        # Converte a lista do DB para o formato de dicionário que o app usa
         return {item['ticker']: item['position_data'] for item in response.data}
     except Exception as e:
         st.error(f"Erro ao carregar posições do DB: {e}")
@@ -54,18 +52,13 @@ def load_positions_from_db():
 
 def add_position_to_db(ticker, position_data):
     try:
-        supabase.table('positions').insert({
-            "ticker": ticker,
-            "position_data": position_data
-        }).execute()
+        supabase.table('positions').insert({"ticker": ticker, "position_data": position_data}).execute()
     except Exception as e:
         st.error(f"Erro ao adicionar posição no DB: {e}")
 
 def update_position_in_db(ticker, position_data):
     try:
-        supabase.table('positions').update({
-            "position_data": position_data
-        }).eq('ticker', ticker).execute()
+        supabase.table('positions').update({"position_data": position_data}).eq('ticker', ticker).execute()
     except Exception as e:
         st.error(f"Erro ao atualizar posição no DB: {e}")
 
@@ -76,9 +69,8 @@ def delete_position_from_db(ticker):
         st.error(f"Erro ao deletar posição no DB: {e}")
 
 # ==============================================================================
-# FUNÇÕES DE API E CÁLCULOS (sem alterações)
+# FUNÇÕES DE API E CÁLCULOS
 # ==============================================================================
-# ... (as funções get_option_data, generate_option_symbol, etc. permanecem as mesmas) ...
 def send_telegram_message(message):
     async def send():
         try:
@@ -120,42 +112,40 @@ def calculate_pl_values(td_price_back, td_price_front, now_price_back, now_price
     return {"initial_cost": initial_cost, "absolute_pl": absolute_pl, "z_percent": z_percent}
 
 # ==============================================================================
-# FUNÇÃO DE RENDERIZAÇÃO (sem alterações)
+# FUNÇÃO DE RENDERIZAÇÃO (ALTERADA)
 # ==============================================================================
-def render_calendar_block(ticker, calendar_data, calendar_history):
-    # ... (código da função render_calendar_block permanece o mesmo) ...
-    cal_type = calendar_data['type']
-    expirations = calendar_data['expirations']
+# ALTERADO: A definição da função agora aceita 4 argumentos para corresponder à chamada
+def render_calendar_block(ticker, calendar_data, live_data, calendar_history):
     st.subheader(f"Calendário {calendar_data['display_name']}")
-    front_symbol = generate_option_symbol(ticker, expirations['front'], calendar_data['strike'], cal_type)
-    back_symbol = generate_option_symbol(ticker, expirations['back'], calendar_data['strike'], cal_type)
-    success_front, front_data = get_option_data(front_symbol)
-    success_back, back_data = get_option_data(back_symbol)
-    if not success_front: st.toast(front_data, icon="🚨")
-    if not success_back: st.toast(back_data, icon="🚨")
-    now_price_front = front_data['last'][0] if success_front and front_data.get('last') else 0
-    now_price_back = back_data['last'][0] if success_back and back_data.get('last') else 0
-    pl_info = calculate_pl_values(calendar_data['td_price_back'], calendar_data['td_price_front'], now_price_back, now_price_front)
-    z_percent = pl_info['z_percent']
+    
+    # Atualiza o histórico
     current_time_str = datetime.now().strftime("%H:%M")
     if not calendar_history['ts'] or calendar_history['ts'][-1] != current_time_str:
         calendar_history['ts'].append(current_time_str)
-        calendar_history['z'].append(z_percent)
+        calendar_history['z'].append(live_data['z_percent'])
+    
+    # Lógica de Alerta
     if calendar_data.get('alert_target', 0) > 0:
-        if z_percent >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
-            msg = f"🎯 *ALERTA DE LUCRO ({cal_type.upper()})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type.upper()} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{z_percent:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
+        if live_data['z_percent'] >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
+            cal_type = calendar_data['type'].upper()
+            msg = f"🎯 *ALERTA DE LUCRO ({cal_type})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{live_data['z_percent']:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
             send_telegram_message(msg)
             calendar_data['alert_sent'] = True
-        elif z_percent < calendar_data['alert_target'] and calendar_data.get('alert_sent', False):
+        elif live_data['z_percent'] < calendar_data['alert_target'] and calendar_data.get('alert_sent', False):
             calendar_data['alert_sent'] = False
+            
+    # Exibição
     col1, col2 = st.columns(2)
     cal_type_upper = calendar_data['type'].upper()
-    col1.metric(f"{cal_type_upper}F Now", f"{now_price_front:.2f}", f"↑ TD: {calendar_data['td_price_front']:.2f}")
-    col2.metric(f"{cal_type_upper}B Now", f"{now_price_back:.2f}", f"↑ TD: {calendar_data['td_price_back']:.2f}")
-    st.metric(f"%Z (Alvo: {calendar_data.get('alert_target', 0)}%)", f"{z_percent:.2f}%")
+    col1.metric(f"{cal_type_upper}F Now", f"{live_data['now_price_front']:.2f}", f"↑ TD: {calendar_data['td_price_front']:.2f}")
+    col2.metric(f"{cal_type_upper}B Now", f"{live_data['now_price_back']:.2f}", f"↑ TD: {calendar_data['td_price_back']:.2f}")
+    
+    st.metric(f"%Z (Alvo: {calendar_data.get('alert_target', 0)}%)", f"{live_data['z_percent']:.2f}%")
+    
     if len(calendar_history['z']) > 1:
         chart_data = pd.DataFrame({f"%Z {calendar_data['display_name']}": calendar_history['z']}, index=calendar_history['ts'])
         st.line_chart(chart_data)
+
     st.divider()
 
 # ==============================================================================
@@ -163,16 +153,13 @@ def render_calendar_block(ticker, calendar_data, calendar_history):
 # ==============================================================================
 st.title("🗓️ Monitoramento de Calendários Duplos Pré-Earnings")
 
-# ALTERADO: Carrega os dados do DB na primeira execução
 if 'positions' not in st.session_state:
     st.session_state.positions = load_positions_from_db()
 
-# (Formulário da Sidebar agora salva no DB)
 with st.sidebar:
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
         ticker = st.text_input("Ticker do Ativo (ex: PETR4)").upper()
-        # ... (todos os outros campos do formulário)
         put_strike = st.number_input("Strike da PUT", format="%.2f", step=0.01, key="p_s")
         td_price_pf = st.number_input("Preço TD - Put Front (Venda)", format="%.2f", step=0.01, key="p_pf")
         td_price_pb = st.number_input("Preço TD - Put Back (Compra)", format="%.2f", step=0.01, key="p_pb")
@@ -198,9 +185,8 @@ with st.sidebar:
                 "history": {"put_original": {"ts": [], "z": []}, "call_original": {"ts": [], "z": []}, "back_vol": {"ts": [], "vol": []}}, 
                 "adjustments": []
             }
-            # ALTERADO: Salva a nova posição no DB
             add_position_to_db(ticker, new_pos_data)
-            st.session_state.positions = load_positions_from_db() # Recarrega do DB
+            st.session_state.positions = load_positions_from_db()
             st.success(f"Posição em {ticker} adicionada ao banco de dados!")
             st.rerun()
 
@@ -209,7 +195,6 @@ if not st.session_state.positions:
 else:
     for ticker, data in list(st.session_state.positions.items()):
         with st.expander(f"Ativo: {ticker}", expanded=True):
-            # ... (código de coleta de dados e renderização dos blocos permanece o mesmo) ...
             all_calendars = [data['put_original'], data['call_original']] + data.get('adjustments', [])
             live_data_list = []
             for cal_data in all_calendars:
@@ -219,47 +204,59 @@ else:
                 success_back, back_api_data = get_option_data(back_symbol)
                 now_price_front = front_api_data['last'][0] if success_front and front_api_data.get('last') else 0
                 now_price_back = back_api_data['last'][0] if success_back and back_api_data.get('last') else 0
-                pl_info = calculate_pl_values(cal_data['td_price_back'], cal_data['td_price_front'], now_price_back, now_price_front)
+                pl_info = calculate_pl_values(cal_data['td_price_back'], cal_data['td_price_front'], now_price_front, now_price_back)
                 live_data_list.append({"now_price_front": now_price_front, "now_price_back": now_price_back, "back_api_data": back_api_data if success_back else None, **pl_info})
+            
             col1, col2 = st.columns(2)
-            with col1: render_calendar_block(ticker, data['put_original'], live_data_list[0], data['history']['put_original'])
-            with col2: render_calendar_block(ticker, data['call_original'], live_data_list[1], data['history']['call_original'])
+            with col1:
+                render_calendar_block(ticker, data['put_original'], live_data_list[0], data['history']['put_original'])
+            with col2:
+                render_calendar_block(ticker, data['call_original'], live_data_list[1], data['history']['call_original'])
+            
             for i, adj_data in enumerate(data.get('adjustments', [])):
                 adj_history_key = f"adj_{i}"
                 if adj_history_key not in data['history']: data['history'][adj_history_key] = {"ts": [], "z": []}
                 if i % 2 == 0:
                     col1, col2 = st.columns(2)
-                    with col1: render_calendar_block(ticker, adj_data, live_data_list[i+2], data['history'][adj_history_key])
+                    with col1:
+                        render_calendar_block(ticker, adj_data, live_data_list[i+2], data['history'][adj_history_key])
                 else:
-                    with col2: render_calendar_block(ticker, adj_data, live_data_list[i+2], data['history'][adj_history_key])
+                    with col2:
+                        render_calendar_block(ticker, adj_data, live_data_list[i+2], data['history'][adj_history_key])
+            
             total_absolute_pl = sum(item['absolute_pl'] for item in live_data_list)
             total_initial_cost = sum(abs(item['initial_cost']) for item in live_data_list)
             total_pl_percent = (total_absolute_pl / total_initial_cost) * 100 if total_initial_cost != 0 else 0
+            
             st.subheader("Resultado Consolidado")
             st.metric("P/L% Total do Trade", f"{total_pl_percent:.2f}%", f"R$ {total_absolute_pl:.2f}")
             st.divider()
+            
             st.subheader("Controle Geral da Posição")
             back_data_p = live_data_list[0]['back_api_data']
             back_data_c = live_data_list[1]['back_api_data']
             back_vol_now_p = back_data_p['iv'][0] * 100 if back_data_p and back_data_p.get('iv') else 0
             back_vol_now_c = back_data_c['iv'][0] * 100 if back_data_c and back_data_c.get('iv') else 0
             back_vol_now = ((back_vol_now_p + back_vol_now_c) / 2) if back_vol_now_p or back_vol_now_c else 0
+            
             current_time_str = datetime.now().strftime("%H:%M")
             vol_history = data['history']['back_vol']
             if not vol_history['ts'] or vol_history['ts'][-1] != current_time_str:
                 vol_history['ts'].append(current_time_str)
                 vol_history['vol'].append(back_vol_now)
+            
             td_vol = data.get("td_back_vol", 0)
             st.metric("Vol Média Atual (Back)", f"{back_vol_now:.2f}%", f"↑ TD: {td_vol:.2f}%")
             if len(vol_history['vol']) > 1:
                 chart_data_v = pd.DataFrame({'Back Vol': vol_history['vol']}, index=vol_history['ts'])
                 st.line_chart(chart_data_v)
+            
             fad_dt = datetime.strptime(data['fad_date'], "%Y-%m-%d").date()
             dias_para_fad = (fad_dt - datetime.now().date()).days
             st.info(f"**FAD (Final Adjustment Date):** {fad_dt.strftime('%d/%m/%Y')} (Faltam {dias_para_fad} dias)")
+            
             if st.button("➕ Adicionar Ajuste", key=f"add_adj_{ticker}"): st.session_state.adjusting_ticker = ticker; st.rerun()
             if st.button("❌ Excluir Posição", key=f"del_{ticker}"):
-                # ALTERADO: Deleta do DB
                 delete_position_from_db(ticker)
                 st.session_state.positions = load_positions_from_db()
                 if 'adjusting_ticker' in st.session_state: del st.session_state.adjusting_ticker
@@ -269,7 +266,6 @@ if 'adjusting_ticker' in st.session_state:
     ticker_to_adjust = st.session_state.adjusting_ticker
     with st.form(key="adjustment_form"):
         st.header(f"Adicionar Ajuste para {ticker_to_adjust}")
-        # ... (campos do formulário de ajuste) ...
         adj_type = st.selectbox("Tipo de Calendário", ["put", "call"])
         adj_strike = st.number_input("Strike do Ajuste", format="%.2f", step=0.01)
         adj_td_price_front = st.number_input("Preço TD - Front (Venda)", format="%.2f", step=0.01)
@@ -289,7 +285,6 @@ if 'adjusting_ticker' in st.session_state:
                 "alert_sent": False, "expirations": adj_exp_str
             }
             position_to_update.setdefault('adjustments', []).append(new_adj)
-            # ALTERADO: Atualiza a posição inteira no DB com o novo ajuste
             update_position_in_db(ticker_to_adjust, position_to_update)
             st.session_state.positions = load_positions_from_db()
             del st.session_state.adjusting_ticker
@@ -297,7 +292,6 @@ if 'adjusting_ticker' in st.session_state:
 
     if st.button("Cancelar Ajuste"): del st.session_state.adjusting_ticker; st.rerun()
 
-# ALTERADO: Atualiza todas as posições no DB ao final de cada ciclo
 for ticker, data in st.session_state.positions.items():
     update_position_in_db(ticker, data)
 
