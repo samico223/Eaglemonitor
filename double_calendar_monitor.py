@@ -12,6 +12,7 @@ import telegram
 # ==============================================================================
 # CONFIGURAÇÕES GERAIS E SEGREDOS
 # ==============================================================================
+st.set_page_config(page_title="Monitor de Calendários", layout="wide")
 MARKET_DATA_TOKEN = st.secrets.get("MARKET_DATA_TOKEN", "")
 BOT_TOKEN = st.secrets.get("telegram", {}).get("BOT_TOKEN", "")
 CHAT_ID = st.secrets.get("telegram", {}).get("CHAT_ID", "")
@@ -53,184 +54,233 @@ def get_option_data(option_symbol):
         data = r.json()
         return data if data.get('s') == 'ok' else None
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 400:
-            st.toast(f"Erro 400: Símbolo da opção inválido: {option_symbol}", icon="🚨")
-        else:
-            st.toast(f"Erro de API para {option_symbol}: {e}", icon="🚨")
+        if e.response.status_code == 400: st.toast(f"Erro 400: Símbolo inválido: {option_symbol}", icon="🚨")
+        else: st.toast(f"Erro de API para {option_symbol}: {e}", icon="🚨")
         return None
     except requests.exceptions.RequestException as e:
         st.toast(f"Erro de conexão para {option_symbol}: {e}", icon="🚨")
         return None
 
-# ALTERADO: Função ajustada para o padrão OCC de 8 dígitos no strike
 def generate_option_symbol(ticker, exp_date, strike, option_type):
-    """Gera o código da opção no formato da B3 (padrão OCC)."""
     exp_dt = datetime.strptime(exp_date, "%Y-%m-%d")
-    # O padrão OCC usa 8 dígitos para o strike (valor * 1000)
-    # Ex: strike 35.50 -> 35500 -> '00035500'
     strike_part = f"{int(strike * 1000):08d}"
-    
-    # Remove o número do final do ticker se for uma ação (ex: PETR4 -> PETR)
-    # A API geralmente espera o ticker base para formar o símbolo da opção.
     base_ticker = ''.join([i for i in ticker if not i.isdigit()])
-    
     return f"{base_ticker}{exp_dt.strftime('%y%m%d')}{option_type.upper()}{strike_part}"
 
 def calculate_z_percent(td_price_back, td_price_front, now_price_back, now_price_front):
     initial_cost = td_price_back - td_price_front
-    current_value = now_price_back - now_price_front
     if initial_cost == 0: return 0.0
+    current_value = now_price_back - now_price_front
     profit_loss = current_value - initial_cost
-    return (profit_loss / abs(initial_cost)) * 100 if initial_cost != 0 else 0.0
+    return (profit_loss / abs(initial_cost)) * 100
+
+# ==============================================================================
+# NOVO: FUNÇÃO REUTILIZÁVEL PARA RENDERIZAR UM CALENDÁRIO
+# ==============================================================================
+def render_calendar_block(ticker, calendar_data, calendar_id, history_data):
+    """
+    Desenha um bloco de monitoramento completo para um único calendário.
+    `calendar_id` é a chave única para o histórico (ex: "put_original", "adj_0").
+    """
+    cal_type = calendar_data['type'].upper()
+    expirations = calendar_data['expirations']
+
+    st.subheader(f"Calendário {calendar_data['display_name']}")
+    
+    front_symbol = generate_option_symbol(ticker, expirations['front'], calendar_data['strike'], cal_type)
+    back_symbol = generate_option_symbol(ticker, expirations['back'], calendar_data['strike'], cal_type)
+    
+    front_data = get_option_data(front_symbol)
+    back_data = get_option_data(back_symbol)
+    
+    now_price_front = front_data['last'][0] if front_data and front_data.get('last') else 0
+    now_price_back = back_data['last'][0] if back_data and back_data.get('last') else 0
+    
+    z_percent = calculate_z_percent(calendar_data['td_price_back'], calendar_data['td_price_front'], now_price_back, now_price_front)
+    
+    # Adiciona o Z atual ao histórico correto
+    history_data['calendars'].setdefault(calendar_id, []).append(z_percent)
+    
+    # Lógica de Alerta
+    if calendar_data.get('alert_target', 0) > 0:
+        if z_percent >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
+            msg = f"🎯 *ALERTA DE LUCRO ({cal_type})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{z_percent:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
+            send_telegram_message(msg)
+            calendar_data['alert_sent'] = True
+        elif z_percent < calendar_data['alert_target'] and calendar_data.get('alert_sent', False):
+            calendar_data['alert_sent'] = False
+            
+    # Exibição
+    col1, col2 = st.columns(2)
+    front_label, back_label = (f"{cal_type}F Now", f"{cal_type}B Now")
+    col1.metric(front_label, f"{now_price_front:.2f}", f"↑ TD: {calendar_data['td_price_front']:.2f}")
+    col2.metric(back_label, f"{now_price_back:.2f}", f"↑ TD: {calendar_data['td_price_back']:.2f}")
+    
+    st.metric(f"%Z (Alvo: {calendar_data.get('alert_target', 0)}%)", f"{z_percent:.2f}%")
+    
+    if len(history_data['calendars'][calendar_id]) > 1:
+        chart_data = pd.DataFrame({f"%Z {calendar_data['display_name']}": history_data['calendars'][calendar_id]}, index=history_data['timestamp'])
+        st.line_chart(chart_data)
+
+    st.divider()
+
+    return back_data # Retorna dados da perna longa para cálculo da VOL
 
 # ==============================================================================
 # CORPO PRINCIPAL DO APP
 # ==============================================================================
-st.set_page_config(page_title="Monitor de Calendários", layout="wide")
-st.markdown("### 🗓️ Monitoramento de Calendários Duplos Pré-Earnings")
+st.title("🗓️ Monitoramento de Calendários Duplos Pré-Earnings")
 
 if 'positions' not in st.session_state:
     st.session_state.positions = load_positions()
 
-# (O restante do código, incluindo o formulário da sidebar, permanece o mesmo)
+# Formulário para adicionar NOVA POSIÇÃO
 with st.sidebar:
     st.header("Adicionar Nova Posição")
-    with st.form(key="add_calendar_form", clear_on_submit=True):
+    with st.form(key="add_position_form", clear_on_submit=True):
+        # ... (Campos do formulário para nova posição) ...
         ticker = st.text_input("Ticker do Ativo (ex: PETR4)").upper()
-        
         st.subheader("Calendário PUT")
         put_strike = st.number_input("Strike da PUT", format="%.2f", step=0.01, key="p_s")
         td_price_pf = st.number_input("Preço TD - Put Front (Venda)", format="%.2f", step=0.01, key="p_pf")
         td_price_pb = st.number_input("Preço TD - Put Back (Compra)", format="%.2f", step=0.01, key="p_pb")
         put_alert_target = st.number_input("Alerta de Lucro % (PUT)", min_value=0.0, step=1.0, key="p_alert")
-
         st.subheader("Calendário CALL")
         call_strike = st.number_input("Strike da CALL", format="%.2f", step=0.01, key="c_s")
         td_price_cf = st.number_input("Preço TD - Call Front (Venda)", format="%.2f", step=0.01, key="c_cf")
         td_price_cb = st.number_input("Preço TD - Call Back (Compra)", format="%.2f", step=0.01, key="c_cb")
         call_alert_target = st.number_input("Alerta de Lucro % (CALL)", min_value=0.0, step=1.0, key="c_alert")
-
-        st.subheader("Vencimentos")
+        st.subheader("Dados Gerais da Operação")
         front_exp = st.date_input("Vencimento Front (Curto)")
         back_exp = st.date_input("Vencimento Back (Longo)")
+        td_back_vol = st.number_input("Volatilidade Back (TD %)", min_value=0.0, step=0.1, format="%.2f")
         
-        submitted = st.form_submit_button("Adicionar Monitoramento")
+        submitted = st.form_submit_button("Adicionar Posição")
 
         if submitted and ticker:
-            if not all([put_strike > 0, call_strike > 0, td_price_pf > 0, td_price_pb > 0, td_price_cf > 0, td_price_cb > 0]):
-                st.error("Todos os preços e strikes devem ser maiores que zero.")
-            elif front_exp >= back_exp:
-                st.error("A data de vencimento 'Front' deve ser anterior à 'Back'.")
-            else:
-                front_exp_str = front_exp.strftime("%Y-%m-%d")
-                back_exp_str = back_exp.strftime("%Y-%m-%d")
-                fad_date = front_exp - timedelta(days=14)
-                
-                new_pos = {
-                    "put_calendar": {"strike": put_strike, "td_price_front": td_price_pf, "td_price_back": td_price_pb, "alert_target": put_alert_target, "alert_sent": False },
-                    "call_calendar": {"strike": call_strike, "td_price_front": td_price_cf, "td_price_back": td_price_cb, "alert_target": call_alert_target, "alert_sent": False},
-                    "expirations": {"front": front_exp_str, "back": back_exp_str}, "fad_date": fad_date.strftime("%Y-%m-%d"),
-                    "history": {"timestamp": [], "put_z": [], "call_z": [], "back_vol": []}, "adjustments": []
-                }
-                
-                st.session_state.positions[ticker] = new_pos
-                save_positions(st.session_state.positions)
-                st.success(f"Posição em {ticker} adicionada!")
-                st.rerun()
+            # Lógica para criar a estrutura da nova posição
+            front_exp_str = front_exp.strftime("%Y-%m-%d")
+            back_exp_str = back_exp.strftime("%Y-%m-%d")
+            fad_date = front_exp - timedelta(days=14)
+            
+            new_pos = {
+                "put_original": {"type": "p", "display_name": "PUT Original", "strike": put_strike, "td_price_front": td_price_pf, "td_price_back": td_price_pb, "alert_target": put_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
+                "call_original": {"type": "c", "display_name": "CALL Original", "strike": call_strike, "td_price_front": td_price_cf, "td_price_back": td_price_cb, "alert_target": call_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
+                "fad_date": fad_date.strftime("%Y-%m-%d"),
+                "td_back_vol": td_back_vol,
+                "history": {"timestamp": [], "calendars": {}, "back_vol": []}, 
+                "adjustments": []
+            }
+            st.session_state.positions[ticker] = new_pos
+            save_positions(st.session_state.positions)
+            st.success(f"Posição em {ticker} adicionada!")
+            st.rerun()
 
+# LÓGICA DE EXIBIÇÃO PRINCIPAL REATORADA
 if not st.session_state.positions:
     st.info("Nenhuma posição monitorada. Adicione uma na barra lateral.")
 else:
+    # Atualiza o timestamp para o histórico de todas as posições
+    current_time = datetime.now()
+    for data in st.session_state.positions.values():
+        if not data['history']['timestamp'] or data['history']['timestamp'][-1] != current_time.strftime("%H:%M"):
+            data['history']['timestamp'].append(current_time.strftime("%H:%M"))
+
     for ticker, data in list(st.session_state.positions.items()):
         with st.expander(f"Ativo: {ticker}", expanded=True):
-            pf_symbol = generate_option_symbol(ticker, data['expirations']['front'], data['put_calendar']['strike'], 'p')
-            pb_symbol = generate_option_symbol(ticker, data['expirations']['back'], data['put_calendar']['strike'], 'p')
-            cf_symbol = generate_option_symbol(ticker, data['expirations']['front'], data['call_calendar']['strike'], 'c')
-            cb_symbol = generate_option_symbol(ticker, data['expirations']['back'], data['call_calendar']['strike'], 'c')
+            
+            # Renderiza os calendários originais e de ajuste
+            # O layout de 2 colunas organiza os calendários lado a lado
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                back_data_p = render_calendar_block(ticker, data['put_original'], 'put_original', data['history'])
+            
+            with col2:
+                back_data_c = render_calendar_block(ticker, data['call_original'], 'call_original', data['history'])
 
-            pf_data = get_option_data(pf_symbol)
-            pb_data = get_option_data(pb_symbol)
-            cf_data = get_option_data(cf_symbol)
-            cb_data = get_option_data(cb_symbol)
-            
-            now_price_pf = pf_data['last'][0] if pf_data and pf_data.get('last') else 0
-            now_price_pb = pb_data['last'][0] if pb_data and pb_data.get('last') else 0
-            now_price_cf = cf_data['last'][0] if cf_data and cf_data.get('last') else 0
-            now_price_cb = cb_data['last'][0] if cb_data and cb_data.get('last') else 0
-            
-            back_vol_now_p = pb_data['iv'][0] if pb_data and pb_data.get('iv') else 0
-            back_vol_now_c = cb_data['iv'][0] if cb_data and cb_data.get('iv') else 0
+            # Renderiza os ajustes
+            for i, adj_data in enumerate(data.get('adjustments', [])):
+                col1, col2 = st.columns(2) # Cria novas colunas para cada par de ajustes
+                if i % 2 == 0:
+                    with col1:
+                        render_calendar_block(ticker, adj_data, f'adj_{i}', data['history'])
+                else:
+                    with col2:
+                        render_calendar_block(ticker, adj_data, f'adj_{i}', data['history'])
+
+            # Painel de controle geral da posição (Vol, FAD, etc.)
+            st.subheader("Controle Geral da Posição")
+
+            # Cálculo da Vol Média das Pernas Longas
+            back_vol_now_p = back_data_p['iv'][0] if back_data_p and back_data_p.get('iv') else 0
+            back_vol_now_c = back_data_c['iv'][0] if back_data_c and back_data_c.get('iv') else 0
             back_vol_now = ((back_vol_now_p + back_vol_now_c) / 2) * 100 if back_vol_now_p and back_vol_now_c else 0
-
-            put_z = calculate_z_percent(data['put_calendar']['td_price_back'], data['put_calendar']['td_price_front'], now_price_pb, now_price_pf)
-            call_z = calculate_z_percent(data['call_calendar']['td_price_back'], data['call_calendar']['td_price_front'], now_price_cb, now_price_cf)
-
-            current_time = datetime.now()
-            if not data['history']['timestamp'] or data['history']['timestamp'][-1] != current_time.strftime("%H:%M"):
-                data['history']['timestamp'].append(current_time.strftime("%H:%M"))
-                data['history']['put_z'].append(put_z)
-                data['history']['call_z'].append(call_z)
-                data['history']['back_vol'].append(back_vol_now)
+            data['history']['back_vol'].append(back_vol_now)
             
-            put_info = data['put_calendar']
-            if put_info.get('alert_target', 0) > 0:
-                if put_z >= put_info['alert_target'] and not put_info.get('alert_sent', False):
-                    msg = (f"🎯 *ALERTA DE LUCRO (PUT)* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* PUT Strike {put_info['strike']:.2f}\n*Lucro Atual:* `{put_z:.2f}%`\n*Meta:* `{put_info['alert_target']:.2f}%`")
-                    send_telegram_message(msg)
-                    st.session_state.positions[ticker]['put_calendar']['alert_sent'] = True
-                elif put_z < put_info['alert_target'] and put_info.get('alert_sent', False):
-                    st.session_state.positions[ticker]['put_calendar']['alert_sent'] = False
+            td_vol = data.get("td_back_vol", 0)
+            st.metric("Vol Média Atual (Back)", f"{back_vol_now:.2f}%", f"↑ TD: {td_vol:.2f}%")
+            if len(data['history']['back_vol']) > 1:
+                chart_data_v = pd.DataFrame({'Back Vol': data['history']['back_vol']}, index=data['history']['timestamp'])
+                st.line_chart(chart_data_v)
             
-            call_info = data['call_calendar']
-            if call_info.get('alert_target', 0) > 0:
-                if call_z >= call_info['alert_target'] and not call_info.get('alert_sent', False):
-                    msg = (f"🎯 *ALERTA DE LUCRO (CALL)* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* CALL Strike {call_info['strike']:.2f}\n*Lucro Atual:* `{call_z:.2f}%`\n*Meta:* `{call_info['alert_target']:.2f}%`")
-                    send_telegram_message(msg)
-                    st.session_state.positions[ticker]['call_calendar']['alert_sent'] = True
-                elif call_z < call_info['alert_target'] and call_info.get('alert_sent', False):
-                    st.session_state.positions[ticker]['call_calendar']['alert_sent'] = False
-
-            col_p, col_c, col_vol = st.columns(3)
-            with col_p:
-                st.subheader("P")
-                c1, c2 = st.columns(2)
-                c1.metric("PF Now", f"{now_price_pf:.2f}", f"↑ TD: {data['put_calendar']['td_price_front']:.2f}")
-                c2.metric("PB Now", f"{now_price_pb:.2f}", f"↑ TD: {data['put_calendar']['td_price_back']:.2f}")
-                st.metric(f"%Z Put (Alvo: {put_info['alert_target']}%)", f"{put_z:.2f}%")
-                if len(data['history']['put_z']) > 1:
-                    chart_data_p = pd.DataFrame({'%Z Put': data['history']['put_z']}, index=data['history']['timestamp'])
-                    st.line_chart(chart_data_p)
-            with col_c:
-                st.subheader("C")
-                c1, c2 = st.columns(2)
-                c1.metric("CF Now", f"{now_price_cf:.2f}", f"↑ TD: {data['call_calendar']['td_price_front']:.2f}")
-                c2.metric("CB Now", f"{now_price_cb:.2f}", f"↑ TD: {data['call_calendar']['td_price_back']:.2f}")
-                st.metric(f"%Z Call (Alvo: {call_info['alert_target']}%)", f"{call_z:.2f}%")
-                if len(data['history']['call_z']) > 1:
-                    chart_data_c = pd.DataFrame({'%Z Call': data['history']['call_z']}, index=data['history']['timestamp'])
-                    st.line_chart(chart_data_c)
-            with col_vol:
-                st.subheader("Back Vol")
-                td_vol = data.get("td_back_vol", back_vol_now)
-                if "td_back_vol" not in data: data["td_back_vol"] = td_vol
-                st.metric("Vol Atual", f"{back_vol_now:.2f}%", f"↑ TD: {td_vol:.2f}%")
-                if len(data['history']['back_vol']) > 1:
-                    chart_data_v = pd.DataFrame({'Back Vol': data['history']['back_vol']}, index=data['history']['timestamp'])
-                    st.line_chart(chart_data_v)
-            st.divider()
             fad_dt = datetime.strptime(data['fad_date'], "%Y-%m-%d").date()
             dias_para_fad = (fad_dt - datetime.now().date()).days
-            if dias_para_fad <= 7:
-                st.warning(f"**FAD (Final Adjustment Date):** {fad_dt.strftime('%d/%m/%Y')} (Faltam {dias_para_fad} dias)")
-            else:
-                st.info(f"**FAD (Final Adjustment Date):** {fad_dt.strftime('%d/%m/%Y')} (Faltam {dias_para_fad} dias)")
+            st.info(f"**FAD (Final Adjustment Date):** {fad_dt.strftime('%d/%m/%Y')} (Faltam {dias_para_fad} dias)")
+
+            # Lógica para abrir o formulário de ajuste
+            if st.button("➕ Adicionar Ajuste", key=f"add_adj_{ticker}"):
+                st.session_state.adjusting_ticker = ticker
+                st.rerun()
+            
             if st.button("❌ Excluir Posição", key=f"del_{ticker}"):
                 del st.session_state.positions[ticker]
+                if 'adjusting_ticker' in st.session_state: del st.session_state.adjusting_ticker
                 save_positions(st.session_state.positions)
                 st.rerun()
-    
-    save_positions(st.session_state.positions)
 
+# NOVO: FORMULÁRIO DE AJUSTE (aparece condicionalmente)
+if 'adjusting_ticker' in st.session_state:
+    ticker_to_adjust = st.session_state.adjusting_ticker
+    with st.form(key="adjustment_form"):
+        st.header(f"Adicionar Ajuste para {ticker_to_adjust}")
+        
+        adj_type = st.selectbox("Tipo de Calendário", ["put", "call"])
+        adj_strike = st.number_input("Strike do Ajuste", format="%.2f", step=0.01)
+        adj_td_price_front = st.number_input("Preço TD - Front (Venda)", format="%.2f", step=0.01)
+        adj_td_price_back = st.number_input("Preço TD - Back (Compra)", format="%.2f", step=0.01)
+        adj_alert_target = st.number_input("Alerta de Lucro %", min_value=0.0, step=1.0)
+        adj_front_exp = st.date_input("Vencimento Front (Ajuste)")
+        adj_back_exp = st.date_input("Vencimento Back (Ajuste)")
+
+        save_adj_button = st.form_submit_button("Salvar Ajuste")
+
+        if save_adj_button:
+            num_adjustments = len(st.session_state.positions[ticker_to_adjust].get('adjustments', []))
+            adj_exp_str = {"front": adj_front_exp.strftime("%Y-%m-%d"), "back": adj_back_exp.strftime("%Y-%m-%d")}
+            
+            new_adj = {
+                "type": adj_type,
+                "display_name": f"{adj_type.upper()} Ajuste {num_adjustments + 1}",
+                "strike": adj_strike,
+                "td_price_front": adj_td_price_front,
+                "td_price_back": adj_td_price_back,
+                "alert_target": adj_alert_target,
+                "alert_sent": False,
+                "expirations": adj_exp_str
+            }
+            
+            st.session_state.positions[ticker_to_adjust].setdefault('adjustments', []).append(new_adj)
+            del st.session_state.adjusting_ticker
+            save_positions(st.session_state.positions)
+            st.rerun()
+
+    if st.button("Cancelar Ajuste"):
+        del st.session_state.adjusting_ticker
+        st.rerun()
+
+# SALVAMENTO E ATUALIZAÇÃO
+save_positions(st.session_state.positions)
 st.caption(f"Última atualização: {datetime.now().strftime('%H:%M:%S')}")
 time.sleep(REFRESH_INTERVAL_SECONDS)
 st.rerun()
