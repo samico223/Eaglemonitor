@@ -8,6 +8,7 @@ import json
 import time
 import asyncio
 import telegram
+import os # Import para manipulação de arquivos
 
 # ==============================================================================
 # CONFIGURAÇÕES GERAIS E SEGREDOS
@@ -75,13 +76,9 @@ def calculate_z_percent(td_price_back, td_price_front, now_price_back, now_price
     return (profit_loss / abs(initial_cost)) * 100
 
 # ==============================================================================
-# NOVO: FUNÇÃO REUTILIZÁVEL PARA RENDERIZAR UM CALENDÁRIO
+# FUNÇÃO REUTILIZÁVEL PARA RENDERIZAR UM CALENDÁRIO
 # ==============================================================================
 def render_calendar_block(ticker, calendar_data, calendar_id, history_data):
-    """
-    Desenha um bloco de monitoramento completo para um único calendário.
-    `calendar_id` é a chave única para o histórico (ex: "put_original", "adj_0").
-    """
     cal_type = calendar_data['type'].upper()
     expirations = calendar_data['expirations']
 
@@ -98,10 +95,8 @@ def render_calendar_block(ticker, calendar_data, calendar_id, history_data):
     
     z_percent = calculate_z_percent(calendar_data['td_price_back'], calendar_data['td_price_front'], now_price_back, now_price_front)
     
-    # Adiciona o Z atual ao histórico correto
     history_data['calendars'].setdefault(calendar_id, []).append(z_percent)
     
-    # Lógica de Alerta
     if calendar_data.get('alert_target', 0) > 0:
         if z_percent >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
             msg = f"🎯 *ALERTA DE LUCRO ({cal_type})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{z_percent:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
@@ -110,7 +105,6 @@ def render_calendar_block(ticker, calendar_data, calendar_id, history_data):
         elif z_percent < calendar_data['alert_target'] and calendar_data.get('alert_sent', False):
             calendar_data['alert_sent'] = False
             
-    # Exibição
     col1, col2 = st.columns(2)
     front_label, back_label = (f"{cal_type}F Now", f"{cal_type}B Now")
     col1.metric(front_label, f"{now_price_front:.2f}", f"↑ TD: {calendar_data['td_price_front']:.2f}")
@@ -123,8 +117,7 @@ def render_calendar_block(ticker, calendar_data, calendar_id, history_data):
         st.line_chart(chart_data)
 
     st.divider()
-
-    return back_data # Retorna dados da perna longa para cálculo da VOL
+    return back_data
 
 # ==============================================================================
 # CORPO PRINCIPAL DO APP
@@ -134,11 +127,26 @@ st.title("🗓️ Monitoramento de Calendários Duplos Pré-Earnings")
 if 'positions' not in st.session_state:
     st.session_state.positions = load_positions()
 
-# Formulário para adicionar NOVA POSIÇÃO
+# --- INÍCIO DO BLOCO DE CÓDIGO TEMPORÁRIO ---
+# Este bloco adiciona um botão para deletar o arquivo de dados e corrigir erros.
+# REMOVA ESTE BLOCO APÓS USÁ-LO UMA VEZ.
+st.sidebar.title("Opções de Admin (Temporário)")
+st.sidebar.warning("Use este botão apenas uma vez para resetar os dados salvos e corrigir o erro `KeyError`.")
+if st.sidebar.button("DELETAR ARQUIVO DE DADOS"):
+    if os.path.exists(DB_FILE_PATH):
+        os.remove(DB_FILE_PATH)
+        st.sidebar.success(f"Arquivo '{DB_FILE_PATH}' deletado!")
+        st.sidebar.info("A aplicação será reiniciada.")
+        time.sleep(3) # Pausa para ler a mensagem
+        st.rerun()
+    else:
+        st.sidebar.warning("Arquivo de dados não encontrado.")
+st.sidebar.divider()
+# --- FIM DO BLOCO DE CÓDIGO TEMPORÁRIO ---
+
 with st.sidebar:
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
-        # ... (Campos do formulário para nova posição) ...
         ticker = st.text_input("Ticker do Ativo (ex: PETR4)").upper()
         st.subheader("Calendário PUT")
         put_strike = st.number_input("Strike da PUT", format="%.2f", step=0.01, key="p_s")
@@ -158,7 +166,6 @@ with st.sidebar:
         submitted = st.form_submit_button("Adicionar Posição")
 
         if submitted and ticker:
-            # Lógica para criar a estrutura da nova posição
             front_exp_str = front_exp.strftime("%Y-%m-%d")
             back_exp_str = back_exp.strftime("%Y-%m-%d")
             fad_date = front_exp - timedelta(days=14)
@@ -176,11 +183,9 @@ with st.sidebar:
             st.success(f"Posição em {ticker} adicionada!")
             st.rerun()
 
-# LÓGICA DE EXIBIÇÃO PRINCIPAL REATORADA
 if not st.session_state.positions:
     st.info("Nenhuma posição monitorada. Adicione uma na barra lateral.")
 else:
-    # Atualiza o timestamp para o histórico de todas as posições
     current_time = datetime.now()
     for data in st.session_state.positions.values():
         if not data['history']['timestamp'] or data['history']['timestamp'][-1] != current_time.strftime("%H:%M"):
@@ -188,31 +193,24 @@ else:
 
     for ticker, data in list(st.session_state.positions.items()):
         with st.expander(f"Ativo: {ticker}", expanded=True):
-            
-            # Renderiza os calendários originais e de ajuste
-            # O layout de 2 colunas organiza os calendários lado a lado
             col1, col2 = st.columns(2)
             
             with col1:
                 back_data_p = render_calendar_block(ticker, data['put_original'], 'put_original', data['history'])
-            
             with col2:
                 back_data_c = render_calendar_block(ticker, data['call_original'], 'call_original', data['history'])
 
-            # Renderiza os ajustes
             for i, adj_data in enumerate(data.get('adjustments', [])):
-                col1, col2 = st.columns(2) # Cria novas colunas para cada par de ajustes
                 if i % 2 == 0:
+                    col1, col2 = st.columns(2)
                     with col1:
                         render_calendar_block(ticker, adj_data, f'adj_{i}', data['history'])
                 else:
                     with col2:
                         render_calendar_block(ticker, adj_data, f'adj_{i}', data['history'])
 
-            # Painel de controle geral da posição (Vol, FAD, etc.)
             st.subheader("Controle Geral da Posição")
-
-            # Cálculo da Vol Média das Pernas Longas
+            
             back_vol_now_p = back_data_p['iv'][0] if back_data_p and back_data_p.get('iv') else 0
             back_vol_now_c = back_data_c['iv'][0] if back_data_c and back_data_c.get('iv') else 0
             back_vol_now = ((back_vol_now_p + back_vol_now_c) / 2) * 100 if back_vol_now_p and back_vol_now_c else 0
@@ -228,7 +226,6 @@ else:
             dias_para_fad = (fad_dt - datetime.now().date()).days
             st.info(f"**FAD (Final Adjustment Date):** {fad_dt.strftime('%d/%m/%Y')} (Faltam {dias_para_fad} dias)")
 
-            # Lógica para abrir o formulário de ajuste
             if st.button("➕ Adicionar Ajuste", key=f"add_adj_{ticker}"):
                 st.session_state.adjusting_ticker = ticker
                 st.rerun()
@@ -239,7 +236,6 @@ else:
                 save_positions(st.session_state.positions)
                 st.rerun()
 
-# NOVO: FORMULÁRIO DE AJUSTE (aparece condicionalmente)
 if 'adjusting_ticker' in st.session_state:
     ticker_to_adjust = st.session_state.adjusting_ticker
     with st.form(key="adjustment_form"):
@@ -279,7 +275,6 @@ if 'adjusting_ticker' in st.session_state:
         del st.session_state.adjusting_ticker
         st.rerun()
 
-# SALVAMENTO E ATUALIZAÇÃO
 save_positions(st.session_state.positions)
 st.caption(f"Última atualização: {datetime.now().strftime('%H:%M:%S')}")
 time.sleep(REFRESH_INTERVAL_SECONDS)
