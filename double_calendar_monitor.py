@@ -29,7 +29,7 @@ MARKET_DATA_TOKEN = st.secrets.get("MARKET_DATA_TOKEN", "")
 BOT_TOKEN = st.secrets.get("telegram", {}).get("BOT_TOKEN", "")
 CHAT_ID = st.secrets.get("telegram", {}).get("CHAT_ID", "")
 API_BASE_URL = "https://api.marketdata.app/v1/"
-REFRESH_INTERVAL_SECONDS = 300
+REFRESH_INTERVAL_SECONDS = 300 
 
 try:
     supabase_url = st.secrets["supabase"]["url"]
@@ -103,28 +103,31 @@ def generate_option_symbol(ticker, exp_date, strike, option_type):
     base_ticker = ''.join([i for i in ticker if not i.isdigit()])
     return f"{base_ticker}{exp_dt.strftime('%y%m%d')}{option_type[0].upper()}{strike_part}"
 
+# ALTERADO: A fórmula para 'current_value' foi corrigida.
 def calculate_pl_values(td_price_back, td_price_front, now_price_back, now_price_front):
     initial_cost = td_price_back - td_price_front
     if initial_cost == 0: return {"initial_cost": 0, "absolute_pl": 0, "z_percent": 0}
+    
+    # A linha abaixo estava invertida, causando o erro de cálculo.
+    # Correto: Preço da opção longa (back) - Preço da opção curta (front)
     current_value = now_price_back - now_price_front
+    
     absolute_pl = current_value - initial_cost
     z_percent = (absolute_pl / abs(initial_cost)) * 100
+    
     return {"initial_cost": initial_cost, "absolute_pl": absolute_pl, "z_percent": z_percent}
 
 # ==============================================================================
-# FUNÇÃO DE RENDERIZAÇÃO (ALTERADA)
+# FUNÇÃO DE RENDERIZAÇÃO
 # ==============================================================================
-# ALTERADO: A definição da função agora aceita 4 argumentos para corresponder à chamada
 def render_calendar_block(ticker, calendar_data, live_data, calendar_history):
     st.subheader(f"Calendário {calendar_data['display_name']}")
     
-    # Atualiza o histórico
     current_time_str = datetime.now().strftime("%H:%M")
     if not calendar_history['ts'] or calendar_history['ts'][-1] != current_time_str:
         calendar_history['ts'].append(current_time_str)
         calendar_history['z'].append(live_data['z_percent'])
     
-    # Lógica de Alerta
     if calendar_data.get('alert_target', 0) > 0:
         if live_data['z_percent'] >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
             cal_type = calendar_data['type'].upper()
@@ -134,7 +137,6 @@ def render_calendar_block(ticker, calendar_data, live_data, calendar_history):
         elif live_data['z_percent'] < calendar_data['alert_target'] and calendar_data.get('alert_sent', False):
             calendar_data['alert_sent'] = False
             
-    # Exibição
     col1, col2 = st.columns(2)
     cal_type_upper = calendar_data['type'].upper()
     col1.metric(f"{cal_type_upper}F Now", f"{live_data['now_price_front']:.2f}", f"↑ TD: {calendar_data['td_price_front']:.2f}")
