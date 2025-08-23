@@ -103,17 +103,12 @@ def generate_option_symbol(ticker, exp_date, strike, option_type):
     base_ticker = ''.join([i for i in ticker if not i.isdigit()])
     return f"{base_ticker}{exp_dt.strftime('%y%m%d')}{option_type[0].upper()}{strike_part}"
 
-# ESTA É A FUNÇÃO CORRIGIDA
 def calculate_pl_values(td_price_back, td_price_front, now_price_back, now_price_front):
     initial_cost = td_price_back - td_price_front
     if initial_cost == 0: return {"initial_cost": 0, "absolute_pl": 0, "z_percent": 0}
-    
-    # Fórmula correta:
     current_value = now_price_back - now_price_front
-    
     absolute_pl = current_value - initial_cost
     z_percent = (absolute_pl / abs(initial_cost)) * 100
-    
     return {"initial_cost": initial_cost, "absolute_pl": absolute_pl, "z_percent": z_percent}
 
 # ==============================================================================
@@ -205,7 +200,10 @@ else:
                 success_back, back_api_data = get_option_data(back_symbol)
                 now_price_front = front_api_data['last'][0] if success_front and front_api_data.get('last') else 0
                 now_price_back = back_api_data['last'][0] if success_back and back_api_data.get('last') else 0
-                pl_info = calculate_pl_values(cal_data['td_price_back'], cal_data['td_price_front'], now_price_front, now_price_back)
+                
+                # ALTERADO: A ordem dos argumentos aqui foi corrigida
+                pl_info = calculate_pl_values(cal_data['td_price_back'], cal_data['td_price_front'], now_price_back, now_price_front)
+                
                 live_data_list.append({"now_price_front": now_price_front, "now_price_back": now_price_back, "back_api_data": back_api_data if success_back else None, **pl_info})
             
             col1, col2 = st.columns(2)
