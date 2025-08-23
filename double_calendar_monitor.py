@@ -161,33 +161,6 @@ if 'positions' not in st.session_state:
     st.session_state.positions = load_positions_from_db()
 
 with st.sidebar:
-    # --- INÍCIO DO BLOCO DE CÓDIGO TEMPORÁRIO ---
-    st.header("Admin (Temporário)")
-    st.warning("Use este botão para limpar do histórico os dados inválidos (com P/L de -100%).")
-    if st.button("Corrigir Histórico (Remover Zeros)"):
-        positions = load_positions_from_db()
-        for ticker, pos_data in positions.items():
-            history = pos_data.get('history', {})
-            # Itera sobre todas as chaves do histórico (put_original, call_original, adj_0, etc.)
-            for key, hist_item in history.items():
-                if isinstance(hist_item, dict) and 'ts' in hist_item and 'z' in hist_item:
-                    clean_ts, clean_z = [], []
-                    for ts, z in zip(hist_item['ts'], hist_item['z']):
-                        # Mantém o ponto de dado apenas se o P/L for diferente de -100.0
-                        if z != -100.0:
-                            clean_ts.append(ts)
-                            clean_z.append(z)
-                    hist_item['ts'] = clean_ts
-                    hist_item['z'] = clean_z
-            # Salva os dados limpos de volta no DB
-            update_position_in_db(ticker, pos_data)
-        
-        st.success("Histórico de todos os gráficos foi corrigido!")
-        st.session_state.positions = load_positions_from_db() # Recarrega os dados limpos
-        time.sleep(2)
-        st.rerun()
-    st.divider()
-    # --- FIM DO BLOCO DE CÓDIGO TEMPORÁRIO ---
 
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
