@@ -44,7 +44,6 @@ def send_telegram_message(message):
     try: asyncio.run(send())
     except RuntimeError: asyncio.get_running_loop().create_task(send())
 
-# ALTERADO: A função agora retorna uma tupla (sucesso, resultado) e não exibe mais toasts.
 @st.cache_data(ttl=REFRESH_INTERVAL_SECONDS - 10)
 def get_option_data(option_symbol):
     if not MARKET_DATA_TOKEN or not option_symbol: return (False, "Token ou símbolo ausente.")
@@ -57,7 +56,7 @@ def get_option_data(option_symbol):
         if data.get('s') == 'ok':
             return (True, data)
         else:
-            return (False, "API retornou status 'no_data'.")
+            return (False, f"API retornou 'no_data' para {option_symbol}.")
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 400:
             return (False, f"Erro 400: Símbolo inválido: {option_symbol}")
@@ -66,11 +65,13 @@ def get_option_data(option_symbol):
     except requests.exceptions.RequestException as e:
         return (False, f"Erro de conexão para {option_symbol}: {e}")
 
+# ALTERADO: Corrigido para usar apenas a primeira letra do tipo de opção
 def generate_option_symbol(ticker, exp_date, strike, option_type):
     exp_dt = datetime.strptime(exp_date, "%Y-%m-%d")
     strike_part = f"{int(strike * 1000):08d}"
     base_ticker = ''.join([i for i in ticker if not i.isdigit()])
-    return f"{base_ticker}{exp_dt.strftime('%y%m%d')}{option_type.upper()}{strike_part}"
+    # Usa option_type[0] para pegar 'p' ou 'c' em vez da palavra inteira
+    return f"{base_ticker}{exp_dt.strftime('%y%m%d')}{option_type[0].upper()}{strike_part}"
 
 def calculate_z_percent(td_price_back, td_price_front, now_price_back, now_price_front):
     initial_cost = td_price_back - td_price_front
@@ -80,10 +81,10 @@ def calculate_z_percent(td_price_back, td_price_front, now_price_back, now_price
     return (profit_loss / abs(initial_cost)) * 100
 
 # ==============================================================================
-# FUNÇÃO REUTILIZÁVEL PARA RENDERIZAR UM CALENDÁRIO (ALTERADA)
+# FUNÇÃO REUTILIZÁVEL PARA RENDERIZAR UM CALENDÁRIO
 # ==============================================================================
 def render_calendar_block(ticker, calendar_data, calendar_history):
-    cal_type = calendar_data['type'].upper()
+    cal_type = calendar_data['type'] # Mantém 'put' ou 'call'
     expirations = calendar_data['expirations']
 
     st.subheader(f"Calendário {calendar_data['display_name']}")
@@ -91,7 +92,6 @@ def render_calendar_block(ticker, calendar_data, calendar_history):
     front_symbol = generate_option_symbol(ticker, expirations['front'], calendar_data['strike'], cal_type)
     back_symbol = generate_option_symbol(ticker, expirations['back'], calendar_data['strike'], cal_type)
     
-    # ALTERADO: Lógica para tratar o novo retorno da função da API
     success_front, front_data = get_option_data(front_symbol)
     success_back, back_data = get_option_data(back_symbol)
     
@@ -110,14 +110,14 @@ def render_calendar_block(ticker, calendar_data, calendar_history):
     
     if calendar_data.get('alert_target', 0) > 0:
         if z_percent >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
-            msg = f"🎯 *ALERTA DE LUCRO ({cal_type})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{z_percent:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
+            msg = f"🎯 *ALERTA DE LUCRO ({cal_type.upper()})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type.upper()} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{z_percent:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
             send_telegram_message(msg)
             calendar_data['alert_sent'] = True
         elif z_percent < calendar_data['alert_target'] and calendar_data.get('alert_sent', False):
             calendar_data['alert_sent'] = False
             
     col1, col2 = st.columns(2)
-    front_label, back_label = (f"{cal_type}F Now", f"{cal_type}B Now")
+    front_label, back_label = (f"{cal_type.upper()}F Now", f"{cal_type.upper()}B Now")
     col1.metric(front_label, f"{now_price_front:.2f}", f"↑ TD: {calendar_data['td_price_front']:.2f}")
     col2.metric(back_label, f"{now_price_back:.2f}", f"↑ TD: {calendar_data['td_price_back']:.2f}")
     
@@ -138,7 +138,6 @@ st.title("🗓️ Monitoramento de Calendários Duplos Pré-Earnings")
 if 'positions' not in st.session_state:
     st.session_state.positions = load_positions()
 
-# (Formulário da Sidebar permanece o mesmo, sem o botão temporário)
 with st.sidebar:
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
@@ -165,8 +164,8 @@ with st.sidebar:
             fad_date = front_exp - timedelta(days=14)
             
             new_pos = {
-                "put_original": {"type": "p", "display_name": "PUT Original", "strike": put_strike, "td_price_front": td_price_pf, "td_price_back": td_price_pb, "alert_target": put_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
-                "call_original": {"type": "c", "display_name": "CALL Original", "strike": call_strike, "td_price_front": td_price_cf, "td_price_back": td_price_cb, "alert_target": call_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
+                "put_original": {"type": "put", "display_name": "PUT Original", "strike": put_strike, "td_price_front": td_price_pf, "td_price_back": td_price_pb, "alert_target": put_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
+                "call_original": {"type": "call", "display_name": "CALL Original", "strike": call_strike, "td_price_front": td_price_cf, "td_price_back": td_price_cb, "alert_target": call_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
                 "fad_date": fad_date.strftime("%Y-%m-%d"),
                 "td_back_vol": td_back_vol,
                 "history": {"put_original": {"ts": [], "z": []}, "call_original": {"ts": [], "z": []}, "back_vol": {"ts": [], "vol": []}}, 
@@ -204,9 +203,9 @@ else:
 
             st.subheader("Controle Geral da Posição")
             
-            back_vol_now_p = back_data_p['iv'][0] if back_data_p and back_data_p.get('iv') else 0
-            back_vol_now_c = back_data_c['iv'][0] if back_data_c and back_data_c.get('iv') else 0
-            back_vol_now = ((back_vol_now_p + back_vol_now_c) / 2) * 100 if back_vol_now_p and back_vol_now_c else 0
+            back_vol_now_p = back_data_p['iv'][0] * 100 if back_data_p and back_data_p.get('iv') else 0
+            back_vol_now_c = back_data_c['iv'][0] * 100 if back_data_c and back_data_c.get('iv') else 0
+            back_vol_now = ((back_vol_now_p + back_vol_now_c) / 2) if back_vol_now_p or back_vol_now_c else 0
 
             current_time_str = datetime.now().strftime("%H:%M")
             vol_history = data['history']['back_vol']
