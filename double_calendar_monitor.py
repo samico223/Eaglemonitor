@@ -103,18 +103,14 @@ def generate_option_symbol(ticker, exp_date, strike, option_type):
     base_ticker = ''.join([i for i in ticker if not i.isdigit()])
     return f"{base_ticker}{exp_dt.strftime('%y%m%d')}{option_type[0].upper()}{strike_part}"
 
-# ALTERADO: A função agora lida com valores None
 def calculate_pl_values(td_price_back, td_price_front, now_price_back, now_price_front):
     if now_price_back is None or now_price_front is None:
         return {"initial_cost": None, "absolute_pl": None, "z_percent": None}
-    
     initial_cost = td_price_back - td_price_front
     if initial_cost == 0: return {"initial_cost": 0, "absolute_pl": 0, "z_percent": 0}
-    
     current_value = now_price_back - now_price_front
     absolute_pl = current_value - initial_cost
     z_percent = (absolute_pl / abs(initial_cost)) * 100
-    
     return {"initial_cost": initial_cost, "absolute_pl": absolute_pl, "z_percent": z_percent}
 
 # ==============================================================================
@@ -125,7 +121,6 @@ def render_calendar_block(ticker, calendar_data, live_data, calendar_history):
     
     z_percent_val = live_data['z_percent']
     
-    # ALTERADO: Adiciona ao histórico apenas se o valor for válido (não None)
     if z_percent_val is not None:
         current_time_str = datetime.now().strftime("%H:%M")
         if not calendar_history['ts'] or calendar_history['ts'][-1] != current_time_str:
@@ -143,7 +138,6 @@ def render_calendar_block(ticker, calendar_data, live_data, calendar_history):
             
     col1, col2 = st.columns(2)
     cal_type_upper = calendar_data['type'].upper()
-
     price_front_display = f"{live_data['now_price_front']:.2f}" if live_data['now_price_front'] is not None else "---"
     price_back_display = f"{live_data['now_price_back']:.2f}" if live_data['now_price_back'] is not None else "---"
     z_percent_display = f"{z_percent_val:.2f}%" if z_percent_val is not None else "---"
@@ -167,6 +161,34 @@ if 'positions' not in st.session_state:
     st.session_state.positions = load_positions_from_db()
 
 with st.sidebar:
+    # --- INÍCIO DO BLOCO DE CÓDIGO TEMPORÁRIO ---
+    st.header("Admin (Temporário)")
+    st.warning("Use este botão para limpar do histórico os dados inválidos (com P/L de -100%).")
+    if st.button("Corrigir Histórico (Remover Zeros)"):
+        positions = load_positions_from_db()
+        for ticker, pos_data in positions.items():
+            history = pos_data.get('history', {})
+            # Itera sobre todas as chaves do histórico (put_original, call_original, adj_0, etc.)
+            for key, hist_item in history.items():
+                if isinstance(hist_item, dict) and 'ts' in hist_item and 'z' in hist_item:
+                    clean_ts, clean_z = [], []
+                    for ts, z in zip(hist_item['ts'], hist_item['z']):
+                        # Mantém o ponto de dado apenas se o P/L for diferente de -100.0
+                        if z != -100.0:
+                            clean_ts.append(ts)
+                            clean_z.append(z)
+                    hist_item['ts'] = clean_ts
+                    hist_item['z'] = clean_z
+            # Salva os dados limpos de volta no DB
+            update_position_in_db(ticker, pos_data)
+        
+        st.success("Histórico de todos os gráficos foi corrigido!")
+        st.session_state.positions = load_positions_from_db() # Recarrega os dados limpos
+        time.sleep(2)
+        st.rerun()
+    st.divider()
+    # --- FIM DO BLOCO DE CÓDIGO TEMPORÁRIO ---
+
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
         ticker = st.text_input("Ticker do Ativo (ex: PETR4)").upper()
@@ -207,22 +229,16 @@ else:
         with st.expander(f"Ativo: {ticker}", expanded=True):
             all_calendars = [data['put_original'], data['call_original']] + data.get('adjustments', [])
             live_data_list = []
-            
             for cal_data in all_calendars:
                 front_symbol = generate_option_symbol(ticker, cal_data['expirations']['front'], cal_data['strike'], cal_data['type'])
                 back_symbol = generate_option_symbol(ticker, cal_data['expirations']['back'], cal_data['strike'], cal_data['type'])
                 success_front, front_api_data = get_option_data(front_symbol)
                 success_back, back_api_data = get_option_data(back_symbol)
-                
-                # ALTERADO: Trata o preço 0 como None (dado inválido)
                 price_front_val = front_api_data['last'][0] if success_front and front_api_data.get('last') else 0
                 now_price_front = price_front_val if price_front_val > 0 else None
-                
                 price_back_val = back_api_data['last'][0] if success_back and back_api_data.get('last') else 0
                 now_price_back = price_back_val if price_back_val > 0 else None
-                
                 pl_info = calculate_pl_values(cal_data['td_price_back'], cal_data['td_price_front'], now_price_back, now_price_front)
-                
                 live_data_list.append({"now_price_front": now_price_front, "now_price_back": now_price_back, "back_api_data": back_api_data if success_back else None, **pl_info})
             
             col1, col2 = st.columns(2)
@@ -262,7 +278,7 @@ else:
             back_vol_now = ((back_vol_now_p + back_vol_now_c) / 2) if back_vol_now_p or back_vol_now_c else 0
             
             vol_history = data['history']['back_vol']
-            if back_vol_now > 0: # Adiciona ao histórico da vol apenas se for válido
+            if back_vol_now > 0:
                 current_time_str = datetime.now().strftime("%H:%M")
                 if not vol_history['ts'] or vol_history['ts'][-1] != current_time_str:
                     vol_history['ts'].append(current_time_str)
