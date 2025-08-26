@@ -80,17 +80,21 @@ def send_telegram_message(message):
     try: asyncio.run(send())
     except RuntimeError: asyncio.get_running_loop().create_task(send())
 
+# ALTERADO: Adicionado 'timeout=10' na chamada da API
 @st.cache_data(ttl=REFRESH_INTERVAL_SECONDS - 10)
 def get_option_data(option_symbol):
     if not MARKET_DATA_TOKEN or not option_symbol: return (False, "Token ou símbolo ausente.")
     url = f"{API_BASE_URL}options/quotes/{option_symbol}/"
     params = {'token': MARKET_DATA_TOKEN}
     try:
-        r = requests.get(url, params=params, headers={"Accept": "application/json"})
+        # A requisição agora vai esperar no máximo 10 segundos por uma resposta
+        r = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=10)
         r.raise_for_status()
         data = r.json()
         if data.get('s') == 'ok': return (True, data)
         else: return (False, f"API retornou 'no_data' para {option_symbol}.")
+    except requests.exceptions.Timeout:
+        return (False, f"Timeout: A API não respondeu a tempo para {option_symbol}.")
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 400: return (False, f"Erro 400: Símbolo inválido: {option_symbol}")
         else: return (False, f"Erro de API para {option_symbol}: {e}")
@@ -161,7 +165,6 @@ if 'positions' not in st.session_state:
     st.session_state.positions = load_positions_from_db()
 
 with st.sidebar:
-
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
         ticker = st.text_input("Ticker do Ativo (ex: PETR4)").upper()
