@@ -80,14 +80,12 @@ def send_telegram_message(message):
     try: asyncio.run(send())
     except RuntimeError: asyncio.get_running_loop().create_task(send())
 
-# ALTERADO: Adicionado 'timeout=10' na chamada da API
 @st.cache_data(ttl=REFRESH_INTERVAL_SECONDS - 10)
 def get_option_data(option_symbol):
     if not MARKET_DATA_TOKEN or not option_symbol: return (False, "Token ou símbolo ausente.")
     url = f"{API_BASE_URL}options/quotes/{option_symbol}/"
     params = {'token': MARKET_DATA_TOKEN}
     try:
-        # A requisição agora vai esperar no máximo 10 segundos por uma resposta
         r = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=10)
         r.raise_for_status()
         data = r.json()
@@ -134,7 +132,7 @@ def render_calendar_block(ticker, calendar_data, live_data, calendar_history):
     if z_percent_val is not None and calendar_data.get('alert_target', 0) > 0:
         if z_percent_val >= calendar_data['alert_target'] and not calendar_data.get('alert_sent', False):
             cal_type = calendar_data['type'].upper()
-            msg = f"🎯 *ALERTA DE LUCRO ({cal_type})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type} Strike {calendar_data['strike']:.2f}\n*Lucro Atual:* `{z_percent_val:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
+            msg = f"🎯 *ALERTA DE LUCRO ({cal_type})* 🎯\n\n*Ativo:* `{ticker}`\n*Calendário:* {cal_type} Strike {calendar_data['strike_front']:.2f}\n*Lucro Atual:* `{z_percent_val:.2f}%`\n*Meta:* `{calendar_data['alert_target']:.2f}%`"
             send_telegram_message(msg)
             calendar_data['alert_sent'] = True
         elif z_percent_val < calendar_data['alert_target'] and calendar_data.get('alert_sent', False):
@@ -168,14 +166,23 @@ with st.sidebar:
     st.header("Adicionar Nova Posição")
     with st.form(key="add_position_form", clear_on_submit=True):
         ticker = st.text_input("Ticker do Ativo (ex: PETR4)").upper()
-        put_strike = st.number_input("Strike da PUT", format="%.2f", step=0.01, key="p_s")
+        
+        st.subheader("Calendário PUT")
+        # ALTERADO: Strikes separados para Put Front e Back
+        put_strike_front = st.number_input("Strike - Put Front (Venda)", format="%.2f", step=0.01, key="p_sf")
+        put_strike_back = st.number_input("Strike - Put Back (Compra)", format="%.2f", step=0.01, key="p_sb")
         td_price_pf = st.number_input("Preço TD - Put Front (Venda)", format="%.2f", step=0.01, key="p_pf")
         td_price_pb = st.number_input("Preço TD - Put Back (Compra)", format="%.2f", step=0.01, key="p_pb")
         put_alert_target = st.number_input("Alerta de Lucro % (PUT)", min_value=0.0, step=1.0, key="p_alert")
-        call_strike = st.number_input("Strike da CALL", format="%.2f", step=0.01, key="c_s")
+        
+        st.subheader("Calendário CALL")
+        # ALTERADO: Strikes separados para Call Front e Back
+        call_strike_front = st.number_input("Strike - Call Front (Venda)", format="%.2f", step=0.01, key="c_sf")
+        call_strike_back = st.number_input("Strike - Call Back (Compra)", format="%.2f", step=0.01, key="c_sb")
         td_price_cf = st.number_input("Preço TD - Call Front (Venda)", format="%.2f", step=0.01, key="c_cf")
         td_price_cb = st.number_input("Preço TD - Call Back (Compra)", format="%.2f", step=0.01, key="c_cb")
         call_alert_target = st.number_input("Alerta de Lucro % (CALL)", min_value=0.0, step=1.0, key="c_alert")
+        
         st.subheader("Dados Gerais da Operação")
         front_exp = st.date_input("Vencimento Front (Curto)")
         back_exp = st.date_input("Vencimento Back (Longo)")
@@ -186,9 +193,11 @@ with st.sidebar:
             front_exp_str = front_exp.strftime("%Y-%m-%d")
             back_exp_str = back_exp.strftime("%Y-%m-%d")
             fad_date = front_exp - timedelta(days=14)
+            
+            # ALTERADO: Estrutura de dados agora usa strike_front e strike_back
             new_pos_data = {
-                "put_original": {"type": "put", "display_name": "PUT Original", "strike": put_strike, "td_price_front": td_price_pf, "td_price_back": td_price_pb, "alert_target": put_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
-                "call_original": {"type": "call", "display_name": "CALL Original", "strike": call_strike, "td_price_front": td_price_cf, "td_price_back": td_price_cb, "alert_target": call_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
+                "put_original": {"type": "put", "display_name": "PUT Original", "strike_front": put_strike_front, "strike_back": put_strike_back, "td_price_front": td_price_pf, "td_price_back": td_price_pb, "alert_target": put_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
+                "call_original": {"type": "call", "display_name": "CALL Original", "strike_front": call_strike_front, "strike_back": call_strike_back, "td_price_front": td_price_cf, "td_price_back": td_price_cb, "alert_target": call_alert_target, "alert_sent": False, "expirations": {"front": front_exp_str, "back": back_exp_str}},
                 "fad_date": fad_date.strftime("%Y-%m-%d"), "td_back_vol": td_back_vol,
                 "history": {"put_original": {"ts": [], "z": []}, "call_original": {"ts": [], "z": []}, "back_vol": {"ts": [], "vol": []}}, 
                 "adjustments": []
@@ -205,9 +214,11 @@ else:
         with st.expander(f"Ativo: {ticker}", expanded=True):
             all_calendars = [data['put_original'], data['call_original']] + data.get('adjustments', [])
             live_data_list = []
+            
             for cal_data in all_calendars:
-                front_symbol = generate_option_symbol(ticker, cal_data['expirations']['front'], cal_data['strike'], cal_data['type'])
-                back_symbol = generate_option_symbol(ticker, cal_data['expirations']['back'], cal_data['strike'], cal_data['type'])
+                # ALTERADO: Passa o strike correto (front/back) para a função
+                front_symbol = generate_option_symbol(ticker, cal_data['expirations']['front'], cal_data['strike_front'], cal_data['type'])
+                back_symbol = generate_option_symbol(ticker, cal_data['expirations']['back'], cal_data['strike_back'], cal_data['type'])
                 success_front, front_api_data = get_option_data(front_symbol)
                 success_back, back_api_data = get_option_data(back_symbol)
                 price_front_val = front_api_data['last'][0] if success_front and front_api_data.get('last') else 0
@@ -282,8 +293,11 @@ if 'adjusting_ticker' in st.session_state:
     ticker_to_adjust = st.session_state.adjusting_ticker
     with st.form(key="adjustment_form"):
         st.header(f"Adicionar Ajuste para {ticker_to_adjust}")
+        
         adj_type = st.selectbox("Tipo de Calendário", ["put", "call"])
-        adj_strike = st.number_input("Strike do Ajuste", format="%.2f", step=0.01)
+        # ALTERADO: Strikes separados para o ajuste
+        adj_strike_front = st.number_input("Strike do Ajuste - Front (Venda)", format="%.2f", step=0.01)
+        adj_strike_back = st.number_input("Strike do Ajuste - Back (Compra)", format="%.2f", step=0.01)
         adj_td_price_front = st.number_input("Preço TD - Front (Venda)", format="%.2f", step=0.01)
         adj_td_price_back = st.number_input("Preço TD - Back (Compra)", format="%.2f", step=0.01)
         adj_alert_target = st.number_input("Alerta de Lucro %", min_value=0.0, step=1.0)
@@ -295,10 +309,14 @@ if 'adjusting_ticker' in st.session_state:
             position_to_update = st.session_state.positions[ticker_to_adjust]
             num_adjustments = len(position_to_update.get('adjustments', []))
             adj_exp_str = {"front": adj_front_exp.strftime("%Y-%m-%d"), "back": adj_back_exp.strftime("%Y-%m-%d")}
+            
+            # ALTERADO: Estrutura de dados do ajuste agora usa strike_front e strike_back
             new_adj = {
-                "type": adj_type, "display_name": f"{adj_type.upper()} Ajuste {num_adjustments + 1}", "strike": adj_strike,
-                "td_price_front": adj_td_price_front, "td_price_back": adj_td_price_back, "alert_target": adj_alert_target,
-                "alert_sent": False, "expirations": adj_exp_str
+                "type": adj_type, "display_name": f"{adj_type.upper()} Ajuste {num_adjustments + 1}", 
+                "strike_front": adj_strike_front, "strike_back": adj_strike_back,
+                "td_price_front": adj_td_price_front, "td_price_back": adj_td_price_back, 
+                "alert_target": adj_alert_target, "alert_sent": False, 
+                "expirations": adj_exp_str
             }
             position_to_update.setdefault('adjustments', []).append(new_adj)
             update_position_in_db(ticker_to_adjust, position_to_update)
